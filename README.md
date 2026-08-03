@@ -109,8 +109,8 @@ dashboards with their own overlay targets, and full scenes ready to load:
 
 ## 📦 Installation
 
-Grab the latest installer from the project's **Releases** page —
-`minecube-studio Setup <version>.exe` — and run it. It installs for the
+Grab the latest installer from the [**Releases**](https://github.com/bejak1999/minecube-studio/releases/latest)
+page — `minecube-studio Setup <version>.exe` — and run it. It installs for the
 current user, adds a Start Menu entry and an uninstaller, and can optionally
 launch with Windows straight into the tray.
 
