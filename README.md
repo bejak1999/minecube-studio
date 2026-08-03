@@ -15,13 +15,13 @@ background, all for free.
   <img src="DEMO/demo-cube-photo-2.jpg" width="49%" alt="The same cube wrapped in one continuous image across all four panels">
 </p>
 
-<!--
-  The demo video isn't committed to git (too large for repo history).
-  To add it back: drag DEMO/demo-video.mp4 into a new GitHub Release or an
-  issue/PR comment -- GitHub hosts it and gives you a permanent
-  user-attachments/assets URL, then drop that URL in here as:
-  <p align="center"><video src="PASTE_URL_HERE" controls width="720"></video></p>
--->
+<p align="center">
+  <a href="https://youtu.be/2rNq9Gi1Xk8">
+    <img src="https://img.youtube.com/vi/2rNq9Gi1Xk8/maxresdefault.jpg" width="720" alt="▶ Watch the demo video on YouTube">
+  </a>
+  <br>
+  <sub>▶ <a href="https://youtu.be/2rNq9Gi1Xk8">Watch the demo video</a></sub>
+</p>
 
 <p align="center"><sub>🎸 Yes, that's a real cube on a real PC, running a meme carousel — because it can.</sub></p>
 
