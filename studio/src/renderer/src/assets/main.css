@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: #020617;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+/*
+ * `color-scheme: dark` above makes Chromium render native form controls with
+ * its own dark-mode text colour instead of inheriting the page's -- text
+ * typed into a plain <input>/<select> without its own explicit text-* class
+ * comes out a washed-out grey that reads as "disabled" even though the field
+ * is perfectly editable. Force inheritance back on globally so this can't
+ * silently recur in a new component that forgets an explicit text colour.
+ */
+input,
+select,
+textarea {
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

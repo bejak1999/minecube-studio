@@ -1,0 +1,30 @@
+# Claude Code's own project data -- not part of the program
+.claude/
+
+# Dependencies
+node_modules/
+
+# Build output (the installer itself ships via GitHub Releases, not git)
+studio/out/
+studio/dist/
+
+# Raw USB-capture / probing artifacts from the original protocol reverse
+# engineering -- large, and superseded by PROTOCOL.md as documentation
+minecube.py
+probe.py
+test_protocol.py
+__pycache__/
+*.pyc
+minecube_full_start_all_red.json
+minecube_full_start_all_red.pcapng
+minecube_initialisierung.json
+test.gif
+test.jpg
+
+# Demo video is too large for git history; distributed separately
+DEMO/demo-video.mp4
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini

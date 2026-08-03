@@ -1,0 +1,55 @@
+{
+  "name": "minecube-studio",
+  "version": "0.1.0",
+  "description": "Ersatzsoftware für die LCD-Panels der Thermaltake Minecube 360 Ultra",
+  "main": "./out/main/index.js",
+  "author": "Benni",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && vitest run",
+    "postinstall": "electron-builder install-app-deps",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.minecube-studio.app",
+    "productName": "minecube-studio",
+    "files": [
+      "out/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    }
+  },
+  "dependencies": {
+    "koffi": "^3.1.4",
+    "mqtt": "^5.15.2",
+    "node-hid": "^3.1.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "@types/node": "^22.10.2",
+    "@types/three": "^0.171.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "pinia": "^2.3.0",
+    "tailwindcss": "^4.1.11",
+    "three": "^0.171.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8",
+    "vue": "^3.5.13",
+    "vue-tsc": "^2.1.10"
+  }
+}
