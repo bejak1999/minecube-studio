@@ -44,6 +44,48 @@ function refresh(): PanelStatus[] {
   return [...panels.values()].map(statusOf);
 }
 
+/**
+ * Rebuild one panel's handle from a fresh USB enumeration.
+ *
+ * A suspend/resume cycle re-enumerates the USB tree, which leaves the open
+ * hidapi handle dead: every subsequent write throws, the panel keeps showing
+ * its last frame forever, and only a restart brought it back. Reopening the
+ * stored path is not enough either -- the path itself can change across
+ * re-enumeration -- so the Panel object is dropped and rebuilt from a current
+ * descriptor.
+ */
+function reconnect(serial: string): Panel | null {
+  const port = panels.get(serial)?.port ?? serial;
+  panels.get(serial)?.close();
+  panels.delete(serial);
+
+  const desc = discoverPanels().find((d) => d.serial === serial);
+  if (!desc) return null; // genuinely gone (unplugged); discover() picks it up if it returns
+
+  const panel = new Panel(desc);
+  panels.set(serial, panel);
+  try {
+    panel.connect();
+    console.log(`${port}: reconnected`);
+    return panel;
+  } catch (err) {
+    panel.lastError = err instanceof Error ? err.message : String(err);
+    panel.close();
+    return null;
+  }
+}
+
+/** A USB enumeration is not free, so a panel that stays broken is not retried on every frame. */
+const RECONNECT_COOLDOWN_MS = 2000;
+const lastReconnectAt = new Map<string, number>();
+
+function reconnectThrottled(serial: string): Panel | null {
+  const now = Date.now();
+  if (now - (lastReconnectAt.get(serial) ?? 0) < RECONNECT_COOLDOWN_MS) return null;
+  lastReconnectAt.set(serial, now);
+  return reconnect(serial);
+}
+
 function drain(): void {
   drainScheduled = false;
   // One frame per panel per pass, so a slow panel cannot starve the others.
@@ -67,6 +109,18 @@ function drain(): void {
     } catch (err) {
       panel.lastError = err instanceof Error ? err.message : String(err);
       console.error(`${panel.port}: write failed: ${panel.lastError}`);
+      // Most likely a handle that went stale while the machine slept. Rebuild
+      // it and push this same frame again, so a panel showing static content
+      // recovers now rather than whenever its content next happens to change.
+      const fresh = reconnectThrottled(serial);
+      if (fresh) {
+        try {
+          fresh.sendJpeg(jpeg);
+          fresh.lastError = null;
+        } catch (retryErr) {
+          fresh.lastError = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        }
+      }
     }
   }
   if (pending.size > 0) scheduleDrain();
@@ -110,6 +164,18 @@ function handle(req: HidRequest): HidResponse {
 
     case 'disconnect': {
       for (const serial of req.serials) panels.get(serial)?.close();
+      return { type: 'panels', panels: [...panels.values()].map(statusOf) };
+    }
+
+    case 'reconnect': {
+      // Snapshot first: reconnect() replaces entries in `panels` as it goes.
+      // Bypass the write-failure cooldown -- this was asked for explicitly.
+      for (const serial of [...panels.keys()]) {
+        lastReconnectAt.delete(serial);
+        reconnect(serial);
+      }
+      // Catch panels that were unplugged (or renamed) while the machine slept.
+      refresh();
       return { type: 'panels', panels: [...panels.values()].map(statusOf) };
     }
 

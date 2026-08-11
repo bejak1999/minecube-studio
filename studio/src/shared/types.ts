@@ -477,6 +477,13 @@ export type HidRequest =
   | { type: 'connect'; serials: string[] }
   | { type: 'disconnect'; serials: string[] }
   | { type: 'realtime'; serial: string; enable: boolean }
+  /**
+   * Drop every open handle and rebuild it from a fresh USB enumeration.
+   * Needed after the machine wakes from sleep: Windows re-enumerates the USB
+   * tree, which leaves the old hidapi handles dead (and can change a device's
+   * path), so a plain reconnect on the existing objects is not enough.
+   */
+  | { type: 'reconnect' }
   | { type: 'stats' };
 
 export interface HidStats {
@@ -533,6 +540,13 @@ export const IPC = {
   frigateEvent: 'frigate:event',
   /** Main -> renderer: the MQTT connection's state changed. */
   mqttStatus: 'mqtt:status',
+  /**
+   * Main -> renderer: the machine just woke from sleep. The panels were
+   * re-opened from scratch, so every slot has to repaint even if its content
+   * did not change -- otherwise a static source never pushes another frame
+   * and the panel keeps showing whatever was on it when the machine slept.
+   */
+  powerResume: 'power:resume',
   /** Renderer -> main: current MQTT connection state, for a window that just loaded. */
   getMqttStatus: 'mqtt:getStatus',
 } as const;

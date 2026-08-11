@@ -456,6 +456,13 @@ export const useStudio = defineStore('studio', () => {
     window.minecube.reportPlayback(pipeline.value.isRunning);
     window.minecube.onTrayTogglePlayback(() => togglePlayback());
     window.minecube.onCycleScene(() => cycleScene());
+    window.minecube.onPowerResume(() => {
+      // The main process already rebuilt the panel handles; push a fresh frame
+      // to each so a slot showing static content does not stay frozen on
+      // whatever was on screen when the machine went to sleep.
+      pipeline.value.invalidateAll();
+      void refreshPanels();
+    });
     window.minecube.onFrigateEvent((event) => {
       recentFrigateEvents.value = [{ ...event, at: Date.now() }, ...recentFrigateEvents.value].slice(0, 20);
       if (config.value) handleFrigateEvent(event, config.value, pipeline.value);

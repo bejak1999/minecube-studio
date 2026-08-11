@@ -79,6 +79,10 @@ const api = {
     ipcRenderer.on(IPC.frigateEvent, (_e, event: FrigateEvent) => handler(event));
   },
   getMqttStatus: (): Promise<MqttStatus> => ipcRenderer.invoke(IPC.getMqttStatus),
+  /** The machine woke from sleep and the panels were re-opened: repaint everything. */
+  onPowerResume: (handler: () => void): void => {
+    ipcRenderer.on(IPC.powerResume, () => handler());
+  },
   /** The MQTT connection's state, pushed whenever it changes. */
   onMqttStatus: (handler: (status: MqttStatus) => void): void => {
     ipcRenderer.on(IPC.mqttStatus, (_e, status: MqttStatus) => handler(status));

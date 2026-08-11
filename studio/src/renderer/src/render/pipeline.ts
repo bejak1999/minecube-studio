@@ -360,6 +360,17 @@ export class Pipeline {
     this.unifiedConfig = null;
   }
 
+  /**
+   * Force every slot to repaint and re-encode on the next tick, even though
+   * nothing about its content changed. Used after the machine wakes from
+   * sleep: the panels were re-opened from scratch, and a slot showing a still
+   * image would otherwise never push another frame -- the compositor's dirty
+   * key is identical, so it would sit there holding a stale picture forever.
+   */
+  invalidateAll(): void {
+    for (const slot of this.slots) slot.canvas.invalidate();
+  }
+
   setOverlay(index: number, overlay: Overlay | null, key = ''): void {
     const slot = this.slots[index];
     slot.overlay = overlay;
