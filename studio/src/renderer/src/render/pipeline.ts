@@ -371,6 +371,36 @@ export class Pipeline {
     for (const slot of this.slots) slot.canvas.invalidate();
   }
 
+  /**
+   * Tear down and rebuild every source from scratch.
+   *
+   * Needed after the machine wakes: a stream source holds a WebSocket and an
+   * RTCPeerConnection (or a long-lived MJPEG response) that the OS quietly
+   * drops while asleep, and nothing in the source notices -- there is no
+   * reconnect path, so the panel keeps showing the last frame that arrived
+   * before the machine slept. invalidateAll() is not enough on its own: it
+   * only repaints whatever the now-dead source last produced.
+   */
+  async restartSources(): Promise<void> {
+    const cfg = this.config;
+    if (!cfg) return;
+
+    if (cfg.layout === 'unified') {
+      await this.disposeUnified();
+      await this.ensureUnified(cfg.unifiedSource);
+    } else {
+      await Promise.all(
+        cfg.slots.map(async (slotCfg, index) => {
+          // Dropping sourceConfig is what makes ensureSlot's sameSource()
+          // check rebuild rather than decide nothing changed.
+          await this.disposeSlotSource(this.slots[index]);
+          await this.ensureSlot(index, slotCfg);
+        }),
+      );
+    }
+    this.invalidateAll();
+  }
+
   setOverlay(index: number, overlay: Overlay | null, key = ''): void {
     const slot = this.slots[index];
     slot.overlay = overlay;

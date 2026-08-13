@@ -131,6 +131,52 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let netMonitor: NetworkMonitor | null = null;
 let gpuMonitor: GpuMonitor | null = null;
 
+function reopenNetworkMonitor(): void {
+  try {
+    netMonitor?.close();
+  } catch {
+    // The handle is exactly what went bad; closing it is best-effort.
+  }
+  netMonitor = openNetworkMonitor();
+}
+
+function reopenGpuMonitor(): void {
+  try {
+    gpuMonitor?.close();
+  } catch {
+    // as above
+  }
+  gpuMonitor = openGpuMonitor();
+}
+
+/**
+ * Read one native monitor, surviving a handle that has gone stale.
+ *
+ * Neither a PDH query handle nor an NVML device handle reliably survives a
+ * suspend/resume cycle, and `read()` throws when its handle is dead. Without
+ * this the exception would escape the whole tick, so a single broken counter
+ * would take down the entire snapshot -- including the CPU/RAM/disk values,
+ * which are perfectly fine -- and every dashboard would sit frozen until the
+ * app was restarted. Reopening costs one failed sample; if it cannot be
+ * reopened the monitor stays null and is simply skipped from then on.
+ */
+function readNative<T>(monitor: { read(): T | null } | null, reopen: () => void, label: string): T | null {
+  if (!monitor) return null;
+  try {
+    return monitor.read();
+  } catch (err) {
+    console.warn(`[metrics] ${label} read failed, reopening: ${err instanceof Error ? err.message : String(err)}`);
+    reopen();
+    return null;
+  }
+}
+
+/** Called after the machine wakes, before anything has had a chance to read a dead handle. */
+export function reopenNativeMonitors(): void {
+  reopenNetworkMonitor();
+  reopenGpuMonitor();
+}
+
 export function startMetrics(getConfig: () => AppConfig, onTick: (snapshot: MetricsSnapshot) => void): void {
   if (timer) return;
 
@@ -153,6 +199,11 @@ export function startMetrics(getConfig: () => AppConfig, onTick: (snapshot: Metr
     busy = true;
     try {
       await runTick(cfg);
+    } catch (err) {
+      // One bad sample must not kill the polling loop -- without this the
+      // rejection escapes as an unhandled promise and every dashboard stops
+      // updating for good.
+      console.warn(`[metrics] tick failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       busy = false;
     }
@@ -163,13 +214,13 @@ export function startMetrics(getConfig: () => AppConfig, onTick: (snapshot: Metr
 
     Object.assign(values, await sampleDisks());
 
-    const net = netMonitor?.read();
+    const net = readNative(netMonitor, reopenNetworkMonitor, 'network');
     if (net) {
       values['net.rxKbps'] = net.rxKbps;
       values['net.txKbps'] = net.txKbps;
     }
 
-    const gpu = gpuMonitor?.read();
+    const gpu = readNative(gpuMonitor, reopenGpuMonitor, 'gpu');
     if (gpu) {
       values['gpu.load'] = gpu.load;
       values['gpu.temp'] = gpu.temp;

@@ -439,6 +439,27 @@ export const useStudio = defineStore('studio', () => {
     }
   }
 
+  /**
+   * Rebuild every source after the machine wakes, retrying while the network
+   * comes back.
+   *
+   * The main process already re-opened the panels. On this side the sources
+   * have to be rebuilt too: a camera stream's WebSocket and peer connection
+   * are dropped while the machine sleeps and never reconnect on their own, so
+   * a plain repaint would only re-draw the last frame from before sleeping.
+   *
+   * The retries matter because Wi-Fi/Ethernet routinely needs several seconds
+   * longer than the panels do -- a single attempt right after the wake-up
+   * would just fail to reach the camera server and leave the panel dead.
+   */
+  async function recoverAfterResume(): Promise<void> {
+    for (const delayMs of [0, 5000, 15000]) {
+      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await pipeline.value.restartSources();
+      if (!pipeline.value.status.some((s) => s.error)) return;
+    }
+  }
+
   async function init(): Promise<void> {
     if (!window.minecube) {
       lastError.value = 'Preload-Bridge fehlt — window.minecube ist nicht verfügbar.';
@@ -457,10 +478,7 @@ export const useStudio = defineStore('studio', () => {
     window.minecube.onTrayTogglePlayback(() => togglePlayback());
     window.minecube.onCycleScene(() => cycleScene());
     window.minecube.onPowerResume(() => {
-      // The main process already rebuilt the panel handles; push a fresh frame
-      // to each so a slot showing static content does not stay frozen on
-      // whatever was on screen when the machine went to sleep.
-      pipeline.value.invalidateAll();
+      void recoverAfterResume();
       void refreshPanels();
     });
     window.minecube.onFrigateEvent((event) => {

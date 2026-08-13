@@ -7,7 +7,7 @@ import { IPC } from '@shared/types';
 import { ConfigStore } from './config';
 import { hidHost } from './hid/host';
 import { handleMediaScheme, registerMediaScheme } from './media-protocol';
-import { listDisks, listHardwareSensors, startMetrics, stopMetrics } from './metrics';
+import { listDisks, listHardwareSensors, reopenNativeMonitors, startMetrics, stopMetrics } from './metrics';
 import { getMqttStatus, stopMqtt, syncMqtt } from './mqtt';
 import { listCameras } from './servers';
 import {
@@ -69,6 +69,9 @@ function broadcastMqttStatus(status: import('@shared/types').MqttStatus): void {
  */
 function watchPowerResume(): void {
   powerMonitor.on('resume', () => {
+    // PDH/NVML handles do not reliably survive suspend either -- rebuild them
+    // before the next poll rather than after it has already failed once.
+    reopenNativeMonitors();
     setTimeout(() => {
       void hidHost
         .send({ type: 'reconnect' })
@@ -165,6 +168,12 @@ function createWindow(): void {
     fakeMinimized = false;
     selfRestoring = true;
     if (window.isMinimized()) window.restore();
+    // hide() before putting the window back: while it sat off-screen with
+    // skipTaskbar set, Windows had it in a tool-window-ish frame state, and
+    // simply moving it back on screen keeps that frame -- the title bar comes
+    // back without its minimize/maximize buttons. Hiding and re-showing makes
+    // Windows rebuild the frame from the restored style.
+    window.hide();
     window.setSkipTaskbar(false);
     if (savedBounds) {
       window.setBounds(savedBounds);
