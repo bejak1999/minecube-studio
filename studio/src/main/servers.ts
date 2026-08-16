@@ -15,7 +15,9 @@ export async function listCameras(server: MediaServer): Promise<CameraEntry[]> {
   if (!server.url) throw new Error('Keine Server-URL gesetzt');
 
   const url = camerasUrl(server);
-  const res = await net.fetch(url);
+  // A server that accepts the connection but never answers would otherwise
+  // leave "Kameras laden" spinning forever with no way to tell why.
+  const res = await net.fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`${server.name}: HTTP ${res.status} von ${url}`);
 
   if (server.kind === 'frigate') {

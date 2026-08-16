@@ -19,6 +19,18 @@ import {
   windowShouldStartHidden,
 } from './tray';
 
+// This app is meant to sit in the tray driving four panels unattended. The
+// default behaviour for an uncaught exception in the main process is a modal
+// "A JavaScript error occurred" dialog that stops everything until someone
+// clicks it -- worse than carrying on with one broken subsystem. Log loudly
+// and keep the panels running instead.
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection:', reason);
+});
+
 registerMediaScheme(); // must happen before the app is ready
 
 let window: BrowserWindow | null = null;

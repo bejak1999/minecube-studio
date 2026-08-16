@@ -79,6 +79,13 @@ export function handleMediaScheme(): void {
     try {
       const res = await net.fetch(upstream, {
         bypassCustomProtocolHandlers: true,
+        // Hand the caller's cancellation through to the upstream connection.
+        // Without this an MJPEG stream -- which never ends on its own -- keeps
+        // running in the main process after the renderer dropped it (a stopped
+        // camera, a source swap, a reconnect after resume), buffering into a
+        // body nobody reads. Each restart then adds another one, and the main
+        // process eventually dies on "Array buffer allocation failed".
+        signal: request.signal,
         // Forward Range so seeking in a local video keeps working.
         headers: request.headers.has('range')
           ? { Range: request.headers.get('range')! }
@@ -87,6 +94,10 @@ export function handleMediaScheme(): void {
       if (!res.ok) console.error(`[media] ${res.status} for ${target}`);
       return withCors(res);
     } catch (err) {
+      // An abort is the normal way a stream ends here, not a failure.
+      if (err instanceof Error && err.name === 'AbortError') {
+        return new Response(null, { status: 499, statusText: 'client closed request' });
+      }
       console.error(`[media] failed ${request.url} -> ${upstream}: ${String(err)}`);
       return new Response('not reachable', { status: 502 });
     }
