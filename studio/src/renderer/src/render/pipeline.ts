@@ -121,6 +121,8 @@ export class Pipeline {
   private running = false;
   private framesThisSecond = 0;
   private secondStartedAt = 0;
+  /** Last error logged by tick(), so a fault that repeats every frame is only reported once. */
+  private lastTickError: string | null = null;
   /** Slot index -> serial of the panel it feeds. */
   private targets: (string | null)[] = [];
   private readonly unsubscribeMetrics: () => void;
@@ -446,8 +448,32 @@ export class Pipeline {
     this.timer = window.setTimeout(() => void this.tick(), interval);
   }
 
+  /**
+   * Runs one frame, and -- whatever happens -- makes sure there is a next one.
+   *
+   * schedule() is the only thing keeping the loop alive. It used to sit at the
+   * very end of the frame body, so an exception anywhere before it skipped the
+   * call -- and because schedule() drives the loop with `void this.tick()`, the
+   * rejection went nowhere: all four panels stayed frozen on their last frame,
+   * silently, with a restart as the only way back. Hence the finally.
+   */
   private async tick(): Promise<void> {
-    if (!this.running || !this.config) return this.schedule();
+    try {
+      await this.runTick();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Only on change: at 20 fps an error that repeats would bury the console.
+      if (this.lastTickError !== message) {
+        console.error(`[pipeline] tick failed: ${message}`);
+        this.lastTickError = message;
+      }
+    } finally {
+      this.schedule();
+    }
+  }
+
+  private async runTick(): Promise<void> {
+    if (!this.running || !this.config) return;
     const cfg = this.config;
     const unified = cfg.layout === 'unified';
 
@@ -504,16 +530,28 @@ export class Pipeline {
         // Overlay dashboards are an individual-mode feature (see SlotConfig).
         const dashboardOverlay: Dashboard | null = unified ? null : getDashboard(slotCfg.overlayDashboardId);
 
-        const changed = slot.canvas.draw(
-          source,
-          viewport,
-          fit,
-          crop,
-          active.rotate,
-          slot.overlay ?? undefined,
-          slot.overlayKey,
-          dashboardOverlay,
-        );
+        let changed = false;
+        try {
+          changed = slot.canvas.draw(
+            source,
+            viewport,
+            fit,
+            crop,
+            active.rotate,
+            slot.overlay ?? undefined,
+            slot.overlayKey,
+            dashboardOverlay,
+          );
+        } catch (err) {
+          // A source in a bad state -- a video whose decoder gave up while the
+          // GPU was busy elsewhere, say -- must not take the other panels with
+          // it. Promise.all rejects on the first failure, so without this one
+          // broken slot skips every slot after it on the same pass.
+          const message = err instanceof Error ? err.message : String(err);
+          if (slot.error !== message) console.error(`[pipeline] slot ${index + 1} draw: ${message}`);
+          slot.error = message;
+          return;
+        }
         if (!changed) return;
         slot.version++;
 
@@ -548,7 +586,8 @@ export class Pipeline {
       // second rather than on every tick.
       for (let i = 0; i < this.slots.length; i++) this.syncStatus(i, this.status[i].currentItemId);
     }
-    this.schedule();
+    // No schedule() here: tick() does it in a finally, so doing it again would
+    // leave two timers running and the loop would double on every pass.
   }
 
   /**

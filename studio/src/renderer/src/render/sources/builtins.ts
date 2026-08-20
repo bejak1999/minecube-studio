@@ -183,8 +183,22 @@ class VideoSource implements FrameSource {
     // Chromium pauses requestVideoFrameCallback and requestAnimationFrame
     // when the window is minimized. We poll instead so the pipeline keeps
     // receiving frames.
+    let lastResumeAttempt = 0;
     this.handle = setInterval(() => {
-      if (!this.el || this.el.paused || this.el.ended) return;
+      const el = this.el;
+      if (!el || el.ended) return;
+      if (el.paused) {
+        // Nothing here pauses deliberately except stop(), which also clears
+        // this interval -- so a paused element means Chromium stopped it by
+        // itself, which it does under memory pressure and around sleep.
+        // Without nudging it the panel sits on its last decoded frame for good.
+        const now = Date.now();
+        if (now - lastResumeAttempt >= 1000) {
+          lastResumeAttempt = now;
+          void el.play().catch(() => undefined);
+        }
+        return;
+      }
       this.revision++;
     }, 33);
   }

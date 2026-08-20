@@ -199,8 +199,19 @@ export class StreamSource implements FrameSource {
   private followFrames(video: HTMLVideoElement): void {
     // Use setInterval instead of requestVideoFrameCallback / rAF so that
     // frame ticking continues when the Electron window is minimized.
+    let lastResumeAttempt = 0;
     this.handle = setInterval(() => {
       if (this.stopped) return;
+      // Same as VideoSource: Chromium pauses media elements on its own under
+      // memory pressure and around sleep, and a paused camera would leave the
+      // panel drawing one stale frame forever.
+      if (video.paused) {
+        const now = Date.now();
+        if (now - lastResumeAttempt >= 1000) {
+          lastResumeAttempt = now;
+          void video.play().catch(() => undefined);
+        }
+      }
       this.size = { w: video.videoWidth, h: video.videoHeight };
       this.revision++;
     }, 33);
