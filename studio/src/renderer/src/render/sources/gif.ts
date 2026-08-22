@@ -77,6 +77,15 @@ export class AnimatedImageSource implements FrameSource {
         const bitmap = await createImageBitmap(image);
         const micros = image.duration ?? 0;
         image.close();
+        // stop() may have run during either await above -- it closes whatever
+        // was decoded so far and empties the list, so pushing now would strand
+        // this bitmap with nothing left to close it. An ImageBitmap holds
+        // uncompressed pixels (a 720x720 frame is ~2 MB), and a carousel
+        // cycling animations restarts sources constantly, so those add up fast.
+        if (this.stopped) {
+          bitmap.close();
+          break;
+        }
         this.frames.push({
           bitmap,
           durationMs: micros > 0 ? Math.max(micros / 1000, MIN_FRAME_MS) : DEFAULT_FRAME_MS,

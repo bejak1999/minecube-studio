@@ -25,6 +25,12 @@ function parseColor(value: string | undefined): string | null {
   return fromBlack === ctx.fillStyle ? fromBlack : null;
 }
 
+/**
+ * How long a media element may claim to be playing without the picture
+ * actually moving before it is treated as stalled and nudged.
+ */
+const STALL_MS = 3000;
+
 /** Blank panel. Also the fallback while a slot is unassigned. */
 class NoneSource implements FrameSource {
   readonly kind = 'none' as const;
@@ -183,23 +189,56 @@ class VideoSource implements FrameSource {
     // Chromium pauses requestVideoFrameCallback and requestAnimationFrame
     // when the window is minimized. We poll instead so the pipeline keeps
     // receiving frames.
-    let lastResumeAttempt = 0;
+    let lastNudge = 0;
+    let lastTime = -1;
+    let progressedAt = Date.now();
+    let stallRecoveries = 0;
+
     this.handle = setInterval(() => {
       const el = this.el;
       if (!el || el.ended) return;
+
       if (el.paused) {
         // Nothing here pauses deliberately except stop(), which also clears
         // this interval -- so a paused element means Chromium stopped it by
         // itself, which it does under memory pressure and around sleep.
         // Without nudging it the panel sits on its last decoded frame for good.
-        const now = Date.now();
-        if (now - lastResumeAttempt >= 1000) {
-          lastResumeAttempt = now;
+        if (Date.now() - lastNudge >= 1000) {
+          lastNudge = Date.now();
           void el.play().catch(() => undefined);
         }
         return;
       }
-      this.revision++;
+
+      if (el.currentTime !== lastTime) {
+        lastTime = el.currentTime;
+        progressedAt = Date.now();
+        stallRecoveries = 0;
+        this.revision++;
+        return;
+      }
+
+      // Playing, but the picture is not moving: the decoder has stalled. That
+      // happens when something else on the machine is hammering the GPU. The
+      // element still reports itself as playing, so the check above never
+      // fires, and the panel would hold this one frame indefinitely while
+      // anything drawn over it -- a dashboard overlay, say -- kept updating.
+      if (Date.now() - progressedAt < STALL_MS || Date.now() - lastNudge < STALL_MS) return;
+      lastNudge = Date.now();
+      stallRecoveries++;
+      if (stallRecoveries <= 2) {
+        // A tiny seek is usually enough to get the decoder producing again.
+        try {
+          el.currentTime += 0.001;
+        } catch {
+          // not seekable yet
+        }
+      } else {
+        // Still stuck after repeated nudges: rebuild the element's pipeline.
+        el.load();
+        void el.play().catch(() => undefined);
+        stallRecoveries = 0;
+      }
     }, 33);
   }
 

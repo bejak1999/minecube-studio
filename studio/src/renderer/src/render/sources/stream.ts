@@ -24,6 +24,13 @@ function proxied(url: string): string {
 
 const CONNECT_TIMEOUT_MS = 8000;
 
+/**
+ * How long the picture may sit still while the element still claims to be
+ * playing before the transport is treated as dead. Generous: a low-framerate
+ * camera is normal, a camera that has not advanced at all for this long is not.
+ */
+const STALL_MS = 10000;
+
 export class StreamSource implements FrameSource {
   readonly kind = 'stream' as const;
   size: { w: number; h: number } | null = null;
@@ -37,6 +44,8 @@ export class StreamSource implements FrameSource {
   private ws: WebSocket | null = null;
   private handle: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  /** Guards against a stall check firing another reconnect while one is in flight. */
+  private restarting = false;
 
   constructor(
     private readonly config: SourceConfig,
@@ -199,26 +208,43 @@ export class StreamSource implements FrameSource {
   private followFrames(video: HTMLVideoElement): void {
     // Use setInterval instead of requestVideoFrameCallback / rAF so that
     // frame ticking continues when the Electron window is minimized.
-    let lastResumeAttempt = 0;
+    let lastNudge = 0;
+    let lastTime = -1;
+    let progressedAt = Date.now();
+
     this.handle = setInterval(() => {
       if (this.stopped) return;
       // Same as VideoSource: Chromium pauses media elements on its own under
       // memory pressure and around sleep, and a paused camera would leave the
       // panel drawing one stale frame forever.
       if (video.paused) {
-        const now = Date.now();
-        if (now - lastResumeAttempt >= 1000) {
-          lastResumeAttempt = now;
+        if (Date.now() - lastNudge >= 1000) {
+          lastNudge = Date.now();
           void video.play().catch(() => undefined);
         }
       }
+
+      if (video.currentTime !== lastTime) {
+        lastTime = video.currentTime;
+        progressedAt = Date.now();
+      } else if (Date.now() - progressedAt >= STALL_MS) {
+        // The picture has not moved for a long time. For a live camera that
+        // means the peer connection is gone -- ICE gives up quietly, and
+        // nothing here would ever notice: the element keeps reporting itself
+        // as playing and the panel holds one frame forever. Rebuilding the
+        // transport is the only way back.
+        progressedAt = Date.now();
+        void this.restart();
+        return;
+      }
+
       this.size = { w: video.videoWidth, h: video.videoHeight };
       this.revision++;
     }, 33);
   }
 
-  stop(): void {
-    this.stopped = true;
+  /** Drop the transport without marking the source stopped, so it can be started again. */
+  private teardown(): void {
     if (this.handle != null) {
       clearInterval(this.handle);
     }
@@ -241,5 +267,33 @@ export class StreamSource implements FrameSource {
       this.img = null;
     }
     this.frame = null;
+  }
+
+  /**
+   * Reconnect after the stream went dead underneath us.
+   *
+   * There is no reconnect anywhere else: the WebSocket and peer connection are
+   * built once in start(), so a camera lost to a network blip, a server
+   * restart or a sleep cycle stayed lost until the whole source was rebuilt
+   * from outside.
+   */
+  private async restart(): Promise<void> {
+    if (this.stopped || this.restarting) return;
+    this.restarting = true;
+    try {
+      this.teardown();
+      this.error = null;
+      if (!this.stopped) await this.start();
+    } catch {
+      // start() records its own error; a failed attempt just means the next
+      // stall check tries again.
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.teardown();
   }
 }
