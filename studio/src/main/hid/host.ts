@@ -7,6 +7,8 @@ import { MessageChannelMain, utilityProcess, type UtilityProcess } from 'electro
 
 import type { HidRequest, HidResponse } from '@shared/types';
 
+import { logDiag } from '../diagnostics';
+
 const REQUEST_TIMEOUT_MS = 8000;
 
 export class HidHost {
@@ -27,8 +29,16 @@ export class HidHost {
       stdio: 'pipe',
     });
 
-    this.child.stdout?.on('data', (d: Buffer) => process.stdout.write(`[hid] ${d}`));
-    this.child.stderr?.on('data', (d: Buffer) => process.stderr.write(`[hid!] ${d}`));
+    // The service is a separate process, so its output is the only window into
+    // what the panels are actually doing. Persist it -- a packaged build shows
+    // no console, and these lines are the record of a panel dropping off the bus.
+    const forward = (prefix: string) => (d: Buffer) => {
+      for (const line of d.toString().split(/\r?\n/)) {
+        if (line.trim()) logDiag(`${prefix} ${line}`);
+      }
+    };
+    this.child.stdout?.on('data', forward('[hid]'));
+    this.child.stderr?.on('data', forward('[hid!]'));
 
     this.child.on('message', (message: { id: number; res: HidResponse }) => {
       const pending = this.waiting.get(message.id);
@@ -38,10 +48,10 @@ export class HidHost {
       pending.resolve(message.res);
     });
 
-    this.child.on('spawn', () => console.log('[hid] service spawned'));
+    this.child.on('spawn', () => logDiag('[hid] service spawned'));
 
     this.child.on('exit', (code) => {
-      console.log(`[hid] service exited with code ${code}`);
+      logDiag(`[hid] service exited with code ${code}`);
       for (const pending of this.waiting.values()) {
         clearTimeout(pending.timer);
         pending.reject(new Error('HID service exited'));

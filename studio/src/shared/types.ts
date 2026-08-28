@@ -549,4 +549,6 @@ export const IPC = {
   powerResume: 'power:resume',
   /** Renderer -> main: current MQTT connection state, for a window that just loaded. */
   getMqttStatus: 'mqtt:getStatus',
+  /** Renderer -> main: reveal diagnostics.log in Explorer. */
+  openDiagnostics: 'diag:open',
 } as const;

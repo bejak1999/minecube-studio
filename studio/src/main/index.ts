@@ -5,6 +5,7 @@ import type { AppConfig, CameraEntry, HidRequest, HidResponse, MediaServer } fro
 import { IPC } from '@shared/types';
 
 import { ConfigStore } from './config';
+import { diagnosticsPath, logDiag, startDiagnostics } from './diagnostics';
 import { hidHost } from './hid/host';
 import { handleMediaScheme, registerMediaScheme } from './media-protocol';
 import { listDisks, listHardwareSensors, reopenNativeMonitors, startMetrics, stopMetrics } from './metrics';
@@ -25,10 +26,10 @@ import {
 // clicks it -- worse than carrying on with one broken subsystem. Log loudly
 // and keep the panels running instead.
 process.on('uncaughtException', (err) => {
-  console.error('[main] uncaughtException:', err);
+  logDiag(`[main] uncaughtException: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[main] unhandledRejection:', reason);
+  logDiag(`[main] unhandledRejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
 });
 
 registerMediaScheme(); // must happen before the app is ready
@@ -80,7 +81,13 @@ function broadcastMqttStatus(status: import('@shared/types').MqttStatus): void {
  * it the reconnect races the OS and finds nothing.
  */
 function watchPowerResume(): void {
+  // Recorded so a panel that dies can be lined up against what the machine was
+  // doing at the time -- a sleep cycle is the prime suspect for a USB device
+  // that has to be power-cycled to come back.
+  powerMonitor.on('suspend', () => logDiag('[power] system suspending'));
+  powerMonitor.on('lock-screen', () => logDiag('[power] screen locked'));
   powerMonitor.on('resume', () => {
+    logDiag('[power] system resumed');
     // PDH/NVML handles do not reliably survive suspend either -- rebuild them
     // before the next poll rather than after it has already failed once.
     reopenNativeMonitors();
@@ -90,7 +97,7 @@ function watchPowerResume(): void {
         .then(() => {
           for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.powerResume);
         })
-        .catch((err) => console.warn('[power] reconnect after resume failed:', err));
+        .catch((err) => logDiag(`[power] reconnect after resume failed: ${String(err)}`));
     }, 2000);
   });
 }
@@ -320,6 +327,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listDisks, () => listDisks());
   ipcMain.handle(IPC.getMqttStatus, () => getMqttStatus());
 
+  ipcMain.handle(IPC.openDiagnostics, () => {
+    shell.showItemInFolder(diagnosticsPath());
+  });
+
   ipcMain.handle(IPC.listScreens, async (): Promise<import('@shared/types').ScreenSource[]> => {
     const { desktopCapturer } = require('electron');
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 160, height: 90 } });
@@ -375,6 +386,7 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(() => {
     handleMediaScheme();
+    startDiagnostics();
     config = new ConfigStore();
     applyAutostart(config.get().autostart);
     applyShortcut(config.get().sceneShortcut);

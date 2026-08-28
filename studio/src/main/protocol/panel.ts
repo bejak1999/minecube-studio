@@ -122,6 +122,31 @@ export class Panel {
     this.request('POST realtimeDisplay 1', { enable });
   }
 
+  /**
+   * One cheap write whose only job is to stop the endpoint looking idle.
+   *
+   * Windows' USB selective suspend powers down a device that has seen no
+   * traffic for a while, and this hardware does not reliably survive that --
+   * it comes back as "device not recognized" and needs a 12 V power cycle.
+   * Static content produces no writes at all here, because the compositor
+   * only sends when the picture actually changes, so an unattended cube can
+   * sit silent for hours and invite exactly that.
+   *
+   * Deliberately does not go through request(): that retries and blocks for
+   * up to a second per attempt, and this runs on the same thread as the frame
+   * writes. One report out, whatever came back drained, done.
+   */
+  keepAlive(): void {
+    this.writeReport(
+      buildTextFrame({ command: 'POST realtimeDisplay 1', body: JSON.stringify({ enable: true }), seq: nextSeq() }),
+    );
+    try {
+      this.dev?.readTimeout(50);
+    } catch {
+      // nothing waiting, or it went away between the write and the read
+    }
+  }
+
   /** Push one baseline JPEG. Returns the number of reports written. */
   sendJpeg(jpeg: Buffer | Uint8Array, tag?: number): number {
     const chunks = buildImageChunks(jpeg, tag);

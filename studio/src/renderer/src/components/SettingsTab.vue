@@ -489,6 +489,19 @@ onBeforeUnmount(() => {
     </section>
 
     <section>
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">{{ t('settings.diagnostics.title') }}</h2>
+      <div class="space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+        <p class="text-[11px] leading-snug text-slate-500">{{ t('settings.diagnostics.description') }}</p>
+        <button
+          class="rounded-md border border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-800"
+          @click="studio.openDiagnostics()"
+        >
+          {{ t('settings.diagnostics.open') }}
+        </button>
+      </div>
+    </section>
+
+    <section>
       <h2 class="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">{{ t('settings.language.title') }}</h2>
       <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
         <p class="mb-2 text-xs text-slate-500">{{ t('settings.language.description') }}</p>

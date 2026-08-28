@@ -75,6 +75,12 @@ export const translations: Record<Language, Record<string, string>> = {
     'settings.transmission.description':
       'WebRTC has the lowest latency; negotiation runs via the main process, the image comes directly. MJPEG works virtually always and is routed via the internal media:// schema so the canvas is not "tainted" and can still be encoded.',
 
+    // Settings - Diagnostics
+    'settings.diagnostics.title': 'Diagnostics',
+    'settings.diagnostics.description':
+      'Panel connection problems are written to a log file, including USB drop-outs, reconnects and sleep/wake events. Open it if a panel freezes or Windows reports an unrecognised USB device.',
+    'settings.diagnostics.open': 'Show log file',
+
     // Settings - Language
     'settings.language.title': 'Language',
     'settings.language.description': 'Choose your preferred language',
@@ -390,6 +396,13 @@ export const translations: Record<Language, Record<string, string>> = {
       'WebRTC hat die geringste Latenz; die Aushandlung läuft über den Hauptprozess, das Bild kommt direkt an. MJPEG funktioniert praktisch immer und wird über das interne media://-Schema geleitet, damit die Canvas nicht „tainted" wird und sich noch encodieren lässt.',
 
     // Settings - Language
+    // Settings - Diagnose
+    'settings.diagnostics.title': 'Diagnose',
+    'settings.diagnostics.description':
+      'Verbindungsprobleme der Panels werden in eine Logdatei geschrieben — inklusive USB-Abbrüchen, Neuverbindungen und Ruhezustand-Ereignissen. Öffne sie, wenn ein Panel einfriert oder Windows ein nicht erkanntes USB-Gerät meldet.',
+    'settings.diagnostics.open': 'Logdatei anzeigen',
+
+    // Settings - Sprache
     'settings.language.title': 'Sprache',
     'settings.language.description': 'Wählen Sie Ihre bevorzugte Sprache',
 

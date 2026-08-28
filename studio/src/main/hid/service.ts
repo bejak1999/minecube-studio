@@ -34,14 +34,53 @@ function refresh(): PanelStatus[] {
   const seen = new Set<string>();
   for (const desc of discoverPanels()) {
     seen.add(desc.serial);
-    if (!panels.has(desc.serial)) panels.set(desc.serial, new Panel(desc));
+    if (!panels.has(desc.serial)) {
+      // Worth recording: this is the moment a panel that had fallen off the
+      // bus comes back, which dates the recovery in the log.
+      console.log(`enumerated ${desc.port} (${desc.serial})`);
+      panels.set(desc.serial, new Panel(desc));
+    }
   }
   for (const [serial, panel] of panels) {
     if (seen.has(serial)) continue;
+    // And this is the moment it disappears -- the single most useful line in
+    // the log when the panels freeze and Windows reports an unknown device.
+    console.error(`${panel.port} (${serial}) VANISHED from USB enumeration`);
     panel.close(); // unplugged
     panels.delete(serial);
+    lastWriteAt.delete(serial);
   }
   return [...panels.values()].map(statusOf);
+}
+
+/**
+ * When each panel was last written to, so the keepalive below knows which ones
+ * have gone quiet -- and so the log can show how long a panel had been idle
+ * before it died, which is what tells us whether idle suspend is the cause.
+ */
+const lastWriteAt = new Map<string, number>();
+
+/**
+ * Windows suspends a USB device that has seen no traffic, and this hardware
+ * does not reliably come back from it. Well under the default idle timeout.
+ */
+const KEEPALIVE_MS = 15000;
+
+function runKeepAlive(): void {
+  const now = Date.now();
+  for (const [serial, panel] of panels) {
+    if (!panel.isOpen) continue;
+    const idleMs = now - (lastWriteAt.get(serial) ?? 0);
+    if (idleMs < KEEPALIVE_MS) continue;
+    try {
+      panel.keepAlive();
+      lastWriteAt.set(serial, Date.now());
+    } catch (err) {
+      panel.lastError = err instanceof Error ? err.message : String(err);
+      console.error(`${panel.port}: keepalive failed after ${Math.round(idleMs / 1000)}s idle: ${panel.lastError}`);
+      reconnectThrottled(serial);
+    }
+  }
 }
 
 /**
@@ -105,10 +144,18 @@ function drain(): void {
       if (panel.framesSent === 1) {
         console.log(`${panel.port}: first frame written, ${jpeg.length} bytes in ${chunks} chunks`);
       }
+      lastWriteAt.set(serial, Date.now());
       panel.lastError = null;
     } catch (err) {
       panel.lastError = err instanceof Error ? err.message : String(err);
-      console.error(`${panel.port}: write failed: ${panel.lastError}`);
+      // The idle gap is the interesting part: a write that fails after a long
+      // quiet spell points at the device having been suspended, one that fails
+      // mid-stream points at something else entirely.
+      const idleMs = Date.now() - (lastWriteAt.get(serial) ?? Date.now());
+      console.error(
+        `${panel.port}: write failed after ${Math.round(idleMs / 1000)}s idle ` +
+          `(${panel.framesSent} frames, ${panel.writes} reports written): ${panel.lastError}`,
+      );
       // Most likely a handle that went stale while the machine slept. Rebuild
       // it and push this same frame again, so a panel showing static content
       // recovers now rather than whenever its content next happens to change.
@@ -249,6 +296,9 @@ function attachFramePort(port: Electron.MessagePortMain): void {
   });
   port.start();
 }
+
+// Checked often, but only actually writes to a panel that has gone quiet.
+setInterval(runKeepAlive, 5000);
 
 process.parentPort.on('message', (event) => {
   if (event.ports.length > 0) {

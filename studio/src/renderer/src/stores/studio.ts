@@ -402,6 +402,11 @@ export const useStudio = defineStore('studio', () => {
     await patch({ frigateRules: (config.value?.frigateRules ?? []).filter((r) => r.id !== id) });
   }
 
+  /** Reveal diagnostics.log in Explorer -- the record of what the panels did before a fault. */
+  async function openDiagnostics(): Promise<void> {
+    await window.minecube.openDiagnostics();
+  }
+
   async function loadScreens(): Promise<void> {
     screenError.value = null;
     try {
@@ -553,6 +558,7 @@ export const useStudio = defineStore('studio', () => {
     loadCameras,
     loadAllCameras,
     loadScreens,
+    openDiagnostics,
     refreshPanels,
     connectAll,
     saveMqtt,
