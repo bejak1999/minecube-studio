@@ -1,6 +1,6 @@
 {
   "name": "minecube-studio",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Ersatzsoftware für die LCD-Panels der Thermaltake Minecube 360 Ultra",
   "main": "./out/main/index.js",
   "author": "Benni",

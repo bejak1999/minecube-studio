@@ -69,7 +69,13 @@ const KEEPALIVE_MS = 15000;
 function runKeepAlive(): void {
   const now = Date.now();
   for (const [serial, panel] of panels) {
-    if (!panel.isOpen) continue;
+    if (!panel.isOpen) {
+      // Second safety net alongside drain(): a panel showing static content
+      // produces no frames at all, so without this a closed one would never
+      // even be noticed, let alone reopened.
+      ensureOpenThrottled(serial);
+      continue;
+    }
     const idleMs = now - (lastWriteAt.get(serial) ?? 0);
     if (idleMs < KEEPALIVE_MS) continue;
     try {
@@ -125,6 +131,49 @@ function reconnectThrottled(serial: string): Panel | null {
   return reconnect(serial);
 }
 
+/** Open and handshake one panel, recording the failure rather than throwing. */
+function openPanel(serial: string, panel: Panel): boolean {
+  try {
+    panel.connect();
+    lastWriteAt.set(serial, Date.now());
+    console.log(`${panel.port}: connected`);
+    return true;
+  } catch (err) {
+    panel.lastError = err instanceof Error ? err.message : String(err);
+    panel.close();
+    console.error(`${panel.port}: connect failed: ${panel.lastError}`);
+    return false;
+  }
+}
+
+/**
+ * Get a panel that is sitting closed back online.
+ *
+ * A closed panel used to be a dead end: drain() skipped it and the keepalive
+ * ignored it, so nothing ever opened it again and it stayed black until the
+ * app was restarted. That is reachable in normal use -- a reconnect that races
+ * the USB tree coming back after sleep leaves exactly this state.
+ *
+ * Tries the handle it already has first, since that is cheap, and only falls
+ * back to a full rebuild if the device came back under a different path.
+ */
+function ensureOpenThrottled(serial: string): Panel | null {
+  const now = Date.now();
+  if (now - (lastReconnectAt.get(serial) ?? 0) < RECONNECT_COOLDOWN_MS) return null;
+  lastReconnectAt.set(serial, now);
+
+  const existing = panels.get(serial);
+  if (existing && !existing.isOpen && openPanel(serial, existing)) return existing;
+  return reconnect(serial);
+}
+
+/** Open everything that is currently closed -- used after a bulk reconnect. */
+function openAllClosed(): void {
+  for (const [serial, panel] of panels) {
+    if (!panel.isOpen) openPanel(serial, panel);
+  }
+}
+
 function drain(): void {
   drainScheduled = false;
   // One frame per panel per pass, so a slow panel cannot starve the others.
@@ -136,7 +185,10 @@ function drain(): void {
       continue;
     }
     if (!panel.isOpen) {
-      console.warn(`frame for closed panel ${panel.port}`);
+      // Not a dead end any more: this is where a panel left closed by a
+      // reconnect that raced the USB tree used to stay black forever.
+      console.warn(`frame for closed panel ${panel.port} -- reopening`);
+      ensureOpenThrottled(serial);
       continue;
     }
     try {
@@ -223,6 +275,14 @@ function handle(req: HidRequest): HidResponse {
       }
       // Catch panels that were unplugged (or renamed) while the machine slept.
       refresh();
+      // refresh() builds Panel objects for whatever it finds but never opens
+      // them, and reconnect() leaves nothing behind for a device the USB tree
+      // had not produced yet. After waking, the four panels come back over
+      // several seconds, so some of them reliably land in one of those states
+      // -- and a closed panel is never written to, which is how three of them
+      // ended up black while the one that happened to enumerate in time
+      // carried on working.
+      openAllClosed();
       return { type: 'panels', panels: [...panels.values()].map(statusOf) };
     }
 
