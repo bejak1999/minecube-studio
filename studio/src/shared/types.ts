@@ -484,6 +484,11 @@ export type HidRequest =
    * path), so a plain reconnect on the existing objects is not enough.
    */
   | { type: 'reconnect' }
+  /**
+   * Release every handle because the machine is going to sleep, rather than
+   * leaving them open pointing at a device that is about to lose power.
+   */
+  | { type: 'suspend' }
   | { type: 'stats' };
 
 export interface HidStats {

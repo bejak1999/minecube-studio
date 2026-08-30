@@ -61,6 +61,15 @@ function refresh(): PanelStatus[] {
 const lastWriteAt = new Map<string, number>();
 
 /**
+ * Set while the machine is asleep.
+ *
+ * Without it the two recovery paths would fight the shutdown: both reopen a
+ * closed panel on sight, so they would immediately undo what the suspend
+ * handler just released -- and reopen a device that is about to lose power.
+ */
+let suspended = false;
+
+/**
  * Windows suspends a USB device that has seen no traffic, and this hardware
  * does not reliably come back from it. Well under the default idle timeout.
  */
@@ -158,6 +167,7 @@ function openPanel(serial: string, panel: Panel): boolean {
  * back to a full rebuild if the device came back under a different path.
  */
 function ensureOpenThrottled(serial: string): Panel | null {
+  if (suspended) return null;
   const now = Date.now();
   if (now - (lastReconnectAt.get(serial) ?? 0) < RECONNECT_COOLDOWN_MS) return null;
   lastReconnectAt.set(serial, now);
@@ -247,6 +257,8 @@ function handle(req: HidRequest): HidResponse {
       return { type: 'panels', panels: refresh() };
 
     case 'connect': {
+      // A manual reconnect from the UI also means we are awake again.
+      suspended = false;
       refresh();
       for (const serial of req.serials) {
         const panel = panels.get(serial);
@@ -266,7 +278,19 @@ function handle(req: HidRequest): HidResponse {
       return { type: 'panels', panels: [...panels.values()].map(statusOf) };
     }
 
+    case 'suspend': {
+      suspended = true;
+      for (const [serial, panel] of panels) {
+        if (!panel.isOpen) continue;
+        panel.suspend();
+        lastWriteAt.delete(serial);
+      }
+      console.log('suspending: released all panel handles');
+      return { type: 'panels', panels: [...panels.values()].map(statusOf) };
+    }
+
     case 'reconnect': {
+      suspended = false;
       // Snapshot first: reconnect() replaces entries in `panels` as it goes.
       // Bypass the write-failure cooldown -- this was asked for explicitly.
       for (const serial of [...panels.keys()]) {

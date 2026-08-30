@@ -147,6 +147,29 @@ export class Panel {
     }
   }
 
+  /**
+   * Tell the panel the host is going to sleep, then let go of the handle.
+   *
+   * The handshake opens with `POST power 1 {"event":"resume"}`, so the
+   * firmware plainly tracks a power state and a matching suspend is the
+   * obvious counterpart -- but the capture never shows one, so the command
+   * itself is inferred, not observed. It is therefore best-effort: whatever
+   * it does or does not do, releasing the handle is the part that matters,
+   * and that happens either way. Leaving a handle open across a suspend
+   * points it at a device that is about to lose power.
+   */
+  suspend(): void {
+    try {
+      this.writeReport(
+        buildTextFrame({ command: 'POST power 1', body: JSON.stringify({ event: 'suspend' }), seq: nextSeq() }),
+      );
+      this.dev?.readTimeout(50);
+    } catch {
+      // The bus may already be going down; the close below is what counts.
+    }
+    this.close();
+  }
+
   /** Push one baseline JPEG. Returns the number of reports written. */
   sendJpeg(jpeg: Buffer | Uint8Array, tag?: number): number {
     const chunks = buildImageChunks(jpeg, tag);

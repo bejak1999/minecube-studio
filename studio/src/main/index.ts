@@ -84,7 +84,16 @@ function watchPowerResume(): void {
   // Recorded so a panel that dies can be lined up against what the machine was
   // doing at the time -- a sleep cycle is the prime suspect for a USB device
   // that has to be power-cycled to come back.
-  powerMonitor.on('suspend', () => logDiag('[power] system suspending'));
+  powerMonitor.on('suspend', () => {
+    logDiag('[power] system suspending -- releasing panel handles');
+    // Hand the panels back before the bus goes down, rather than leaving open
+    // handles pointing at a device that is about to lose power. Deliberately
+    // not awaited: Windows gives no guaranteed window here, and blocking the
+    // suspend would be worse than missing the handoff.
+    void hidHost
+      .send({ type: 'suspend' })
+      .catch((err) => logDiag(`[power] suspend handoff failed: ${String(err)}`));
+  });
   powerMonitor.on('lock-screen', () => logDiag('[power] screen locked'));
   powerMonitor.on('resume', () => {
     logDiag('[power] system resumed');
