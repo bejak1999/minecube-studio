@@ -111,6 +111,27 @@ function watchPowerResume(): void {
   });
 }
 
+/**
+ * Log where the memory is every few minutes.
+ *
+ * The main process has died twice on "Array buffer allocation failed", and
+ * Task Manager showed the app at 5 GB, but neither says *which* process grew
+ * or how fast. A periodic sample does, and it costs nothing.
+ */
+function watchMemory(): void {
+  const MB = 1024 * 1024;
+  setInterval(() => {
+    const byType = new Map<string, number>();
+    for (const m of app.getAppMetrics()) {
+      byType.set(m.type, (byType.get(m.type) ?? 0) + (m.memory?.workingSetSize ?? 0) * 1024);
+    }
+    const parts = [...byType.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, bytes]) => `${type} ${Math.round(bytes / MB)}MB`);
+    logDiag(`[mem] ${parts.join(' | ')}`);
+  }, 5 * 60 * 1000);
+}
+
 function applyShortcut(shortcut?: string): void {
   globalShortcut.unregisterAll();
   if (shortcut) {
@@ -399,6 +420,12 @@ if (!app.requestSingleInstanceLock()) {
     config = new ConfigStore();
     applyAutostart(config.get().autostart);
     applyShortcut(config.get().sceneShortcut);
+    // If the HID service crashes it is restarted and the panels reopened; the
+    // renderer then has to push a frame to each, since static content would
+    // otherwise never write again and the panels would stay on their last image.
+    hidHost.onRestarted = () => {
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.powerResume);
+    };
     hidHost.start();
     registerIpc();
     createTray(trayHooks);
@@ -411,6 +438,7 @@ if (!app.requestSingleInstanceLock()) {
     );
     syncMqtt(config.get(), broadcastFrigateEvent, broadcastMqttStatus);
     watchPowerResume();
+    watchMemory();
 
     session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
       if (permission === 'media') {

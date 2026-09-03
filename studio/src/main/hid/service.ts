@@ -69,6 +69,9 @@ const lastWriteAt = new Map<string, number>();
  */
 let suspended = false;
 
+/** Serials already reported as closed, so the warning is not repeated for every dropped frame. */
+const reportedClosed = new Set<string>();
+
 /**
  * Windows suspends a USB device that has seen no traffic, and this hardware
  * does not reliably come back from it. Well under the default idle timeout.
@@ -144,6 +147,7 @@ function reconnectThrottled(serial: string): Panel | null {
 function openPanel(serial: string, panel: Panel): boolean {
   try {
     panel.connect();
+    reportedClosed.delete(serial);
     lastWriteAt.set(serial, Date.now());
     console.log(`${panel.port}: connected`);
     return true;
@@ -197,10 +201,17 @@ function drain(): void {
     if (!panel.isOpen) {
       // Not a dead end any more: this is where a panel left closed by a
       // reconnect that raced the USB tree used to stay black forever.
-      console.warn(`frame for closed panel ${panel.port} -- reopening`);
+      // Reported once per spell rather than per frame -- frames arrive at up
+      // to 30/s, and while the machine is asleep this ran for hours and
+      // buried everything else in the log.
+      if (!reportedClosed.has(serial)) {
+        reportedClosed.add(serial);
+        console.warn(`frame for closed panel ${panel.port} -- will try to reopen`);
+      }
       ensureOpenThrottled(serial);
       continue;
     }
+    reportedClosed.delete(serial);
     try {
       const chunks = panel.sendJpeg(jpeg);
       if (panel.framesSent === 1) {

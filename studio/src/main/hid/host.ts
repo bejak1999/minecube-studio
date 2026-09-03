@@ -14,6 +14,13 @@ const REQUEST_TIMEOUT_MS = 8000;
 export class HidHost {
   private child: UtilityProcess | null = null;
   private nextId = 1;
+  /** Set by stop() so a deliberate shutdown is not mistaken for a crash. */
+  private stopping = false;
+  private restartTimer: NodeJS.Timeout | null = null;
+  /** Whoever the frame port was last handed to, so it can be re-established after a restart. */
+  private lastTarget: Electron.WebContents | null = null;
+  /** Called once the panels are back, so the renderer can push a fresh frame to each. */
+  onRestarted: (() => void) | null = null;
   private readonly waiting = new Map<
     number,
     { resolve: (res: HidResponse) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
@@ -58,10 +65,58 @@ export class HidHost {
       }
       this.waiting.clear();
       this.child = null;
+      // Nothing used to bring it back. When this process dies every panel
+      // freezes and stays frozen, because all USB traffic goes through it --
+      // and the only way out was restarting the whole app by hand. The
+      // diagnostics log shows it happening three times in a week, always
+      // unattended overnight.
+      if (!this.stopping) this.scheduleRestart();
     });
   }
 
+  /** Bring the service back after a crash, then re-establish everything that hung off it. */
+  private scheduleRestart(): void {
+    if (this.restartTimer || this.stopping) return;
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping || this.child) return;
+      logDiag('[hid] restarting service after crash');
+      this.start();
+      // The renderer's frame port pointed at the dead process; without a fresh
+      // one every frame would be posted into nothing.
+      if (this.lastTarget && !this.lastTarget.isDestroyed()) {
+        try {
+          this.openFramePort(this.lastTarget);
+        } catch (err) {
+          logDiag(`[hid] could not re-open frame port: ${String(err)}`);
+        }
+      }
+      void this.reopenPanels();
+    }, 2000);
+  }
+
+  /**
+   * A freshly spawned service knows about no panels at all -- it has to
+   * enumerate and shake hands again before anything can be drawn.
+   */
+  private async reopenPanels(): Promise<void> {
+    try {
+      const found = await this.send({ type: 'discover' });
+      if (found.type !== 'panels') return;
+      const serials = found.panels.map((p) => p.serial);
+      if (serials.length > 0) await this.send({ type: 'connect', serials });
+      logDiag(`[hid] reconnected ${serials.length} panel(s) after service restart`);
+      // Static content produces no frames on its own, so ask for a repaint.
+      this.onRestarted?.();
+    } catch (err) {
+      logDiag(`[hid] reconnect after service restart failed: ${String(err)}`);
+    }
+  }
+
   stop(): void {
+    this.stopping = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
     this.child?.kill();
     this.child = null;
   }
@@ -88,6 +143,7 @@ export class HidHost {
     const { port1, port2 } = new MessageChannelMain();
     this.child.postMessage(null, [port1]);
     target.postMessage('frames:port', null, [port2]);
+    this.lastTarget = target;
   }
 }
 
