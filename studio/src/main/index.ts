@@ -190,18 +190,20 @@ function createWindow(): void {
    * as hard as a real minimize, so every path that makes the window go away
    * has to come through here.
    *
-   * `hideFromTaskbar` is for the tray paths (close-to-tray, autostart): the
-   * window is genuinely gone as far as the user is concerned, so it must not
-   * sit in the taskbar. A real minimize keeps its taskbar button -- that is
-   * how it gets restored.
+   * Being shown is also the catch: a shown window is a real window, so Windows
+   * can hand it the foreground at any time -- Alt-Tab lands on it, and another
+   * app being launched was enough to pull it back onto the taskbar. Making it
+   * unfocusable is what stops that: it drops out of Alt-Tab, cannot be
+   * activated, and therefore cannot appear on its own.
    */
-  function enterFakeMinimized(hideFromTaskbar = false): void {
+  function enterFakeMinimized(): void {
     if (!window) return;
     savedBounds = window.getBounds();
     fakeMinimized = true;
     selfRestoring = true;
     if (window.isMinimized()) window.restore();
-    window.setSkipTaskbar(hideFromTaskbar);
+    window.setSkipTaskbar(true);
+    window.setFocusable(false);
     window.setPosition(-32000, -32000);
     // showInactive() rather than show(): a window that has never been shown is
     // throttled exactly like a minimized one, but stealing focus at login (or
@@ -217,12 +219,14 @@ function createWindow(): void {
     fakeMinimized = false;
     selfRestoring = true;
     if (window.isMinimized()) window.restore();
-    // hide() before putting the window back: while it sat off-screen with
-    // skipTaskbar set, Windows had it in a tool-window-ish frame state, and
-    // simply moving it back on screen keeps that frame -- the title bar comes
-    // back without its minimize/maximize buttons. Hiding and re-showing makes
-    // Windows rebuild the frame from the restored style.
+    // hide() before putting the window back: while it sat off-screen without
+    // focus and off the taskbar, Windows had it in a tool-window-ish frame
+    // state, and simply moving it back on screen keeps that frame -- the title
+    // bar returns without its minimize/close buttons. Hiding and re-showing
+    // makes Windows rebuild the frame from the restored style, so the window
+    // styles are put back first and only then is it shown.
     window.hide();
+    window.setFocusable(true);
     window.setSkipTaskbar(false);
     if (savedBounds) {
       window.setBounds(savedBounds);
@@ -242,27 +246,23 @@ function createWindow(): void {
     // second -- the panels then crawl after an autostart until the window is
     // opened and re-minimized by hand, which is what used to put it into this
     // state for the first time.
-    if (startHidden) enterFakeMinimized(true);
+    if (startHidden) enterFakeMinimized();
     else window.show();
   });
 
+  // Minimizing parks the window, which takes its taskbar button with it, so
+  // this behaves like closing to the tray: the tray icon is the way back. That
+  // is the price of the parked window being unfocusable, and being unfocusable
+  // is what stops Windows handing it the foreground on its own.
   window.on('minimize', () => {
-    if (!window) return;
-    if (fakeMinimized) {
-      // Second taskbar click while fake-minimized → bring window back.
-      setImmediate(() => bringBack());
-      return;
-    }
+    if (!window || fakeMinimized) return;
     setImmediate(() => enterFakeMinimized());
   });
 
-  // User-initiated restore (Alt-Tab, taskbar click).
+  // Nothing should be able to restore a parked window any more, but if some
+  // other app does it through the shell, put it back properly rather than
+  // leaving it stranded at -32000.
   window.on('restore', () => {
-    if (selfRestoring) return;
-    bringBack();
-  });
-
-  window.on('focus', () => {
     if (selfRestoring) return;
     bringBack();
   });
@@ -278,7 +278,7 @@ function createWindow(): void {
     // Not hide(): a hidden window is throttled by Chromium just like a
     // minimized one, which would drop the panels to a few frames per second
     // for as long as the app sits in the tray.
-    enterFakeMinimized(true);
+    enterFakeMinimized();
   });
 
   // Renderer errors are otherwise only visible in DevTools; surface them on the
