@@ -10,6 +10,7 @@ import { hidHost } from './hid/host';
 import { handleMediaScheme, registerMediaScheme } from './media-protocol';
 import { listDisks, listHardwareSensors, reopenNativeMonitors, startMetrics, stopMetrics } from './metrics';
 import { getMqttStatus, stopMqtt, syncMqtt } from './mqtt';
+import { injectedHooks, processHandleCount } from './process-info';
 import { listCameras } from './servers';
 import {
   applyAutostart,
@@ -120,16 +121,64 @@ function watchPowerResume(): void {
  */
 function watchMemory(): void {
   const MB = 1024 * 1024;
-  setInterval(() => {
-    const byType = new Map<string, number>();
+  let lastHooks = '';
+  const sample = (): void => {
+    // Working set alone misled once already: it counts every view of a shared
+    // section, so thousands of views of the same few buffers read as 4.6 GB
+    // while the process privately held under 1 GB. Both numbers, then.
+    const byType = new Map<string, { ws: number; priv: number }>();
     for (const m of app.getAppMetrics()) {
-      byType.set(m.type, (byType.get(m.type) ?? 0) + (m.memory?.workingSetSize ?? 0) * 1024);
+      const entry = byType.get(m.type) ?? { ws: 0, priv: 0 };
+      entry.ws += (m.memory?.workingSetSize ?? 0) * 1024;
+      entry.priv += (m.memory?.privateBytes ?? 0) * 1024;
+      byType.set(m.type, entry);
     }
     const parts = [...byType.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([type, bytes]) => `${type} ${Math.round(bytes / MB)}MB`);
-    logDiag(`[mem] ${parts.join(' | ')}`);
-  }, 5 * 60 * 1000);
+      .sort((a, b) => b[1].ws - a[1].ws)
+      .map(([type, v]) => `${type} ${Math.round(v.ws / MB)}/${Math.round(v.priv / MB)}MB`);
+    const heap = process.memoryUsage();
+    const handles = processHandleCount();
+    logDiag(
+      `[mem] (working set/private) ${parts.join(' | ')} || main: js ${Math.round(heap.heapUsed / MB)}MB, ` +
+        `buffers ${Math.round(heap.arrayBuffers / MB)}MB, handles ${handles ?? '?'}`,
+    );
+
+    // Programs like the NVIDIA overlay inject themselves some time after start,
+    // so this is re-checked with every sample and logged whenever it changes.
+    const hooks = injectedHooks().join(', ');
+    if (hooks !== lastHooks) {
+      logDiag(`[env] foreign modules injected into the main process: ${hooks || 'none'}`);
+      lastHooks = hooks;
+    }
+  };
+  setTimeout(sample, 60 * 1000);
+  setInterval(sample, 5 * 60 * 1000);
+}
+
+/**
+ * Record, and where possible recover from, one of the app's own processes
+ * dying.
+ *
+ * None of this was logged before, and it mattered: the diagnostics log shows
+ * the renderer vanishing outright one evening while the app carried on for
+ * three more hours -- every panel frozen on its last frame, with nothing to
+ * say why. The renderer is reloaded by the window itself (see createWindow);
+ * this covers the GPU and utility processes.
+ */
+function watchChildProcesses(): void {
+  app.on('child-process-gone', (_event, details) => {
+    logDiag(
+      `[proc] ${details.type}${details.name ? ` (${details.name})` : ''} gone: ${details.reason}, exit code ${details.exitCode}`,
+    );
+    if (details.type === 'GPU' && details.reason !== 'clean-exit') {
+      // Chromium starts a new GPU process on its own, but every hardware video
+      // decoder and camera stream lived in the old one. The resume path
+      // already knows how to rebuild all sources and repaint every panel.
+      setTimeout(() => {
+        for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.powerResume);
+      }, 3000);
+    }
+  });
 }
 
 function applyShortcut(shortcut?: string): void {
@@ -234,8 +283,42 @@ function createWindow(): void {
     }
     window.show();
     window.focus();
+    repairFrame();
     // Events from show/focus fire asynchronously; keep the guard up briefly.
     setTimeout(() => { selfRestoring = false; }, 300);
+  }
+
+  /**
+   * Make Windows redraw the title bar from the window's real styles.
+   *
+   * The window still sometimes comes back from the tray without a frame or
+   * without its caption buttons. It does not reproduce in isolation -- the
+   * same park/unpark sequence restores a perfect frame every time -- so
+   * something only present in long-running use (other programs hooking the
+   * window, display changes while it sat off-screen) leaves the frame state
+   * stale. Each of these setters rewrites its style bit and forces the frame
+   * to be recomputed, which repairs the buttons whatever removed them; the
+   * check afterwards records whether the frame itself was gone, so the log
+   * can say what actually happens.
+   */
+  function repairFrame(): void {
+    if (!window) return;
+    window.setMinimizable(true);
+    window.setMaximizable(true);
+    window.setClosable(true);
+    setTimeout(() => {
+      if (!window || window.isDestroyed() || !window.isVisible() || window.isFullScreen()) return;
+      const outer = window.getBounds();
+      const inner = window.getContentBounds();
+      if (outer.height - inner.height < 8) {
+        logDiag(
+          `[window] restored without a title bar (outer ${outer.width}x${outer.height}, content ${inner.width}x${inner.height}) -- rebuilding the frame`,
+        );
+        window.hide();
+        window.show();
+        window.focus();
+      }
+    }, 500);
   }
 
   const startHidden = windowShouldStartHidden(config.get().startMinimized);
@@ -317,6 +400,53 @@ function createWindow(): void {
   });
   window.webContents.on('did-start-navigation', () => {
     framePortOpened = false;
+  });
+
+  // The renderer is the whole render pipeline, so when it dies every panel
+  // freezes on its last frame -- and nothing brought it back, the app simply
+  // ran on without it. Reload it instead; the page sets itself up from
+  // scratch, including a fresh frame port. Capped, so a renderer that dies
+  // straight away again does not turn into a crash loop.
+  const recentReloads: number[] = [];
+  const reloadRenderer = (why: string): void => {
+    const now = Date.now();
+    while (recentReloads.length && now - recentReloads[0] > 10 * 60 * 1000) recentReloads.shift();
+    if (recentReloads.length >= 3) {
+      logDiag(`[proc] not reloading the renderer again (${why}): 3 reloads in the last 10 minutes`);
+      return;
+    }
+    recentReloads.push(now);
+    logDiag(`[proc] reloading the renderer (${why})`);
+    setTimeout(() => {
+      if (window && !window.isDestroyed()) window.webContents.reload();
+    }, 1000);
+  };
+
+  window.webContents.on('render-process-gone', (_event, details) => {
+    logDiag(`[proc] renderer gone: ${details.reason}, exit code ${details.exitCode}`);
+    if (details.reason !== 'clean-exit') reloadRenderer(details.reason);
+  });
+
+  // A renderer that hangs freezes the panels just as surely as one that
+  // crashes, but produces no event of its own beyond this one.
+  let hangTimer: NodeJS.Timeout | null = null;
+  window.webContents.on('unresponsive', () => {
+    logDiag('[proc] renderer unresponsive');
+    if (hangTimer) return;
+    hangTimer = setTimeout(() => {
+      hangTimer = null;
+      if (!window || window.isDestroyed()) return;
+      logDiag('[proc] renderer still unresponsive after 60s -- restarting it');
+      window.webContents.forcefullyCrashRenderer();
+      reloadRenderer('hung');
+    }, 60 * 1000);
+  });
+  window.webContents.on('responsive', () => {
+    if (hangTimer) {
+      clearTimeout(hangTimer);
+      hangTimer = null;
+      logDiag('[proc] renderer responsive again');
+    }
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -439,6 +569,7 @@ if (!app.requestSingleInstanceLock()) {
     syncMqtt(config.get(), broadcastFrigateEvent, broadcastMqttStatus);
     watchPowerResume();
     watchMemory();
+    watchChildProcesses();
 
     session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
       if (permission === 'media') {
